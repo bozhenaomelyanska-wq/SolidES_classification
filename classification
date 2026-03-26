@@ -1,0 +1,398 @@
+# ------------------------------------------------------------
+# This script is designed for the R environment and is part of
+# the SolidES project focused on mapping invasive Solidago spp.
+# using UAV-based RGB orthomosaics.
+#
+# The workflow includes:
+# - computation of spectral indices and GLCM texture features,
+# - construction of a multilayer predictor stack,
+# - Random Forest classification with repeated sampling (10 runs),
+# - evaluation using precision, recall, and F1-score,
+# - generation of prediction maps.
+#
+# The script supports reproducible creation of high-quality
+# reference datasets for large-scale satellite-based analysis.
+# ------------------------------------------------------------
+
+# Required packages:
+# install.packages(c("glcm", "terra", "sf", "caret", "randomForest", "openxlsx", "raster"))
+
+library(glcm)
+library(terra)
+library(sf)
+library(caret)
+library(randomForest)
+library(openxlsx)
+
+# ---------------------------
+# WORKING DIRECTORY AND INPUT FILES
+# ---------------------------
+# This script assumes that the working directory contains:
+# 1. an RGB orthomosaic: "2024-08-14_2_trzesn_orto.tif"
+# 2. a reference shapefile: "2024-08-14_2_trzesn_referencja.shp"
+#    together with all associated shapefile components (.dbf, .shx, .prj, etc.)
+
+base_dir <- "."
+
+orthomosaic_path <- file.path(base_dir, "2024-08-14_2_trzesn_orto.tif")
+reference_path <- file.path(base_dir, "2024-08-14_2_trzesn_referencja.shp")
+
+# Small constant used to avoid division by zero in selected spectral indices
+eps <- 1e-6
+
+# ---------------------------
+# LOAD INPUT DATA
+# ---------------------------
+orthomosaic <- rast(orthomosaic_path)
+reference_polygons <- st_read(reference_path, quiet = TRUE)
+
+if (nlyr(orthomosaic) < 3) {
+  stop("The orthomosaic has fewer than 3 bands, but the script assumes RGB input.")
+}
+
+red <- orthomosaic[[1]]
+green <- orthomosaic[[2]]
+blue <- orthomosaic[[3]]
+
+# ---------------------------
+# COMPUTE GLCM TEXTURE FEATURES
+# ---------------------------
+# The glcm package works with RasterLayer objects, so RGB bands are temporarily
+# converted from terra format to raster format, then converted back to terra.
+
+red_raster <- raster::raster(red)
+green_raster <- raster::raster(green)
+blue_raster <- raster::raster(blue)
+
+glcm_red_raw <- glcm(
+  red_raster,
+  window = c(3, 3),
+  statistics = c("contrast", "entropy", "homogeneity")
+)
+
+glcm_green_raw <- glcm(
+  green_raster,
+  window = c(3, 3),
+  statistics = c("contrast", "entropy", "homogeneity")
+)
+
+glcm_blue_raw <- glcm(
+  blue_raster,
+  window = c(3, 3),
+  statistics = c("contrast", "entropy", "homogeneity")
+)
+
+glcm_red <- rast(glcm_red_raw)
+glcm_green <- rast(glcm_green_raw)
+glcm_blue <- rast(glcm_blue_raw)
+
+names(glcm_red) <- c(
+  "glcm_red_contrast",
+  "glcm_red_entropy",
+  "glcm_red_homogeneity"
+)
+
+names(glcm_green) <- c(
+  "glcm_green_contrast",
+  "glcm_green_entropy",
+  "glcm_green_homogeneity"
+)
+
+names(glcm_blue) <- c(
+  "glcm_blue_contrast",
+  "glcm_blue_entropy",
+  "glcm_blue_homogeneity"
+)
+
+writeRaster(
+  glcm_red,
+  filename = file.path(base_dir, "glcm_results_red.tif"),
+  overwrite = TRUE
+)
+
+writeRaster(
+  glcm_green,
+  filename = file.path(base_dir, "glcm_results_green.tif"),
+  overwrite = TRUE
+)
+
+writeRaster(
+  glcm_blue,
+  filename = file.path(base_dir, "glcm_results_blue.tif"),
+  overwrite = TRUE
+)
+
+# ---------------------------
+# COMPUTE SPECTRAL INDICES
+# ---------------------------
+tgi <- green - 0.39 * red - 0.61 * blue
+names(tgi) <- "tgi"
+writeRaster(tgi, filename = file.path(base_dir, "tgi_results.tif"), overwrite = TRUE)
+
+veg <- green / ((red^0.667 * blue^0.334) + eps)
+names(veg) <- "veg"
+writeRaster(veg, filename = file.path(base_dir, "veg_results.tif"), overwrite = TRUE)
+
+brightness_index <- sqrt((red^2 + green^2 + blue^2) / 3)
+names(brightness_index) <- "bi"
+writeRaster(
+  brightness_index,
+  filename = file.path(base_dir, "bi_results.tif"),
+  overwrite = TRUE
+)
+
+bcc <- blue / (red + green + blue + eps)
+names(bcc) <- "bcc"
+writeRaster(bcc, filename = file.path(base_dir, "bcc_results.tif"), overwrite = TRUE)
+
+vndvi <- 0.5268 * (red^0.1294 * green^0.2389 * blue^0.3118)
+names(vndvi) <- "vndvi"
+writeRaster(vndvi, filename = file.path(base_dir, "vndvi_results.tif"), overwrite = TRUE)
+
+cive <- 0.441 * red - 0.881 * green + 0.385 * blue + 18.78745
+names(cive) <- "cive"
+writeRaster(cive, filename = file.path(base_dir, "cive_results.tif"), overwrite = TRUE)
+
+ipca <- 0.994 * abs(red - blue) +
+  0.961 * abs(green - blue) +
+  0.914 * abs(green - red)
+names(ipca) <- "ipca"
+writeRaster(ipca, filename = file.path(base_dir, "ipca_results.tif"), overwrite = TRUE)
+
+mgrvi <- (green^2 - red^2) / (green^2 + red^2 + eps)
+names(mgrvi) <- "mgrvi"
+writeRaster(mgrvi, filename = file.path(base_dir, "mgrvi_results.tif"), overwrite = TRUE)
+
+# ---------------------------
+# BUILD THE MULTILAYER PREDICTOR STACK
+# ---------------------------
+rgb_layers <- orthomosaic[[1:3]]
+names(rgb_layers) <- c("orto_1", "orto_2", "orto_3")
+
+predictor_stack <- c(
+  glcm_red,
+  glcm_green,
+  glcm_blue,
+  rgb_layers,
+  tgi,
+  veg,
+  brightness_index,
+  bcc,
+  vndvi,
+  cive,
+  ipca,
+  mgrvi
+)
+
+writeRaster(
+  predictor_stack,
+  filename = file.path(base_dir, "merged_results.tif"),
+  overwrite = TRUE
+)
+
+plot(predictor_stack)
+
+# ---------------------------
+# CHECK AND ALIGN CRS
+# ---------------------------
+raster_crs <- crs(predictor_stack)
+vector_crs <- st_crs(reference_polygons)$wkt
+
+if (!identical(raster_crs, vector_crs)) {
+  reference_polygons <- st_transform(reference_polygons, raster_crs)
+}
+
+reference_vect <- vect(reference_polygons)
+
+# ---------------------------
+# EXTRACT PIXEL-LEVEL TRAINING DATA
+# ---------------------------
+# Pixel values are extracted from reference polygons.
+# The subsequent train/validation split is therefore performed at the pixel level.
+
+training_data <- extract(predictor_stack, reference_vect, df = TRUE)
+
+if (!"klasy" %in% names(reference_polygons)) {
+  stop("The reference layer does not contain the required 'klasy' column.")
+}
+
+training_data$klasy <- reference_polygons$klasy[training_data$ID]
+
+# Remove rows with missing class labels
+training_data <- training_data[!is.na(training_data$klasy), ]
+
+# Keep only ID, predictor variables, and class labels
+expected_columns <- c("ID", names(predictor_stack), "klasy")
+training_data <- training_data[, intersect(expected_columns, names(training_data))]
+
+# Convert integer columns to numeric where needed
+training_data <- as.data.frame(lapply(training_data, function(column) {
+  if (is.integer(column)) {
+    as.numeric(column)
+  } else {
+    column
+  }
+}))
+
+training_data$klasy <- as.factor(training_data$klasy)
+
+# Replace invalid values in predictor columns
+predictor_columns <- setdiff(names(training_data), c("ID", "klasy"))
+training_data[, predictor_columns] <- lapply(
+  training_data[, predictor_columns, drop = FALSE],
+  function(column) ifelse(is.na(column) | is.nan(column) | is.infinite(column), 0, column)
+)
+
+# ---------------------------
+# RANDOM FOREST CLASSIFICATION, 10 REPETITIONS
+# ---------------------------
+# This script assumes binary classification with class labels:
+# "inne" and "nawloc"
+
+classification_results <- vector("list", 10)
+
+for (i in 1:10) {
+  set.seed(i)
+
+  train_index <- createDataPartition(training_data$klasy, p = 0.5, list = FALSE)
+
+  training_set <- training_data[train_index, ]
+  validation_set <- training_data[-train_index, ]
+
+  training_set <- training_set[, setdiff(names(training_set), "ID"), drop = FALSE]
+  validation_set <- validation_set[, setdiff(names(validation_set), "ID"), drop = FALSE]
+
+  training_set$klasy <- as.factor(training_set$klasy)
+  validation_set$klasy <- as.factor(validation_set$klasy)
+
+  training_predictors <- training_set[, setdiff(names(training_set), "klasy"), drop = FALSE]
+  validation_predictors <- validation_set[, setdiff(names(validation_set), "klasy"), drop = FALSE]
+
+  if (!all(sapply(training_predictors, is.numeric))) {
+    stop(paste("Iteration", i, ": some training predictors are not numeric."))
+  }
+
+  if (!all(sapply(validation_predictors, is.numeric))) {
+    stop(paste("Iteration", i, ": some validation predictors are not numeric."))
+  }
+
+  rf_model <- randomForest(
+    klasy ~ .,
+    data = training_set,
+    ntree = 500,
+    importance = TRUE
+  )
+
+  predictions <- predict(rf_model, validation_set)
+  confusion <- confusionMatrix(predictions, validation_set$klasy)
+  confusion_table <- confusion$table
+
+  tp_inne <- confusion_table["inne", "inne"]
+  fp_inne <- sum(confusion_table[, "inne"]) - tp_inne
+  fn_inne <- sum(confusion_table["inne", ]) - tp_inne
+  precision_inne <- tp_inne / (tp_inne + fp_inne)
+  recall_inne <- tp_inne / (tp_inne + fn_inne)
+  f1_inne <- 2 * (precision_inne * recall_inne) / (precision_inne + recall_inne)
+
+  tp_nawloc <- confusion_table["nawloc", "nawloc"]
+  fp_nawloc <- sum(confusion_table[, "nawloc"]) - tp_nawloc
+  fn_nawloc <- sum(confusion_table["nawloc", ]) - tp_nawloc
+  precision_nawloc <- tp_nawloc / (tp_nawloc + fp_nawloc)
+  recall_nawloc <- tp_nawloc / (tp_nawloc + fn_nawloc)
+  f1_nawloc <- 2 * (precision_nawloc * recall_nawloc) / (precision_nawloc + recall_nawloc)
+
+  classification_results[[i]] <- list(
+    model = rf_model,
+    confusion_matrix = confusion,
+    f1_inne = f1_inne,
+    f1_nawloc = f1_nawloc,
+    overall_accuracy = unname(confusion$overall["Accuracy"])
+  )
+}
+
+# ---------------------------
+# SAVE CLASSIFICATION RESULTS
+# ---------------------------
+save(
+  classification_results,
+  file = file.path(base_dir, "classification_results.RData")
+)
+
+f1_summary <- do.call(rbind, lapply(seq_along(classification_results), function(i) {
+  result <- classification_results[[i]]
+  data.frame(
+    iteration = c(i, i),
+    class = c("inne", "nawloc"),
+    F1 = c(as.numeric(result$f1_inne), as.numeric(result$f1_nawloc)),
+    stringsAsFactors = FALSE
+  )
+}))
+
+write.csv(
+  f1_summary,
+  file.path(base_dir, "f1_scores.csv"),
+  row.names = FALSE
+)
+
+print(f1_summary)
+
+# ---------------------------
+# GENERATE THE FINAL PREDICTION MAP
+# ---------------------------
+# The prediction map is produced using the model from the last repetition.
+
+rf_model_final <- classification_results[[10]]$model
+
+# Match raster layers to model predictors
+model_variables <- rownames(rf_model_final$importance)
+predictor_stack_for_prediction <- predictor_stack[[model_variables]]
+
+# Replace missing values in raster layers
+for (j in 1:nlyr(predictor_stack_for_prediction)) {
+  layer_j <- predictor_stack_for_prediction[[j]]
+  layer_j[is.na(layer_j)] <- 0
+  predictor_stack_for_prediction[[j]] <- layer_j
+}
+
+predicted_map <- terra::predict(
+  predictor_stack_for_prediction,
+  rf_model_final,
+  filename = file.path(base_dir, "wynik_trzesn.tif"),
+  overwrite = TRUE
+)
+
+plot(predicted_map, main = "Random Forest classification result")
+
+# ---------------------------
+# METRICS FROM THE LAST REPETITION
+# ---------------------------
+confusion_last <- classification_results[[10]]$confusion_matrix
+confusion_table_last <- confusion_last$table
+
+tp_inne <- confusion_table_last["inne", "inne"]
+fp_inne <- sum(confusion_table_last[, "inne"]) - tp_inne
+fn_inne <- sum(confusion_table_last["inne", ]) - tp_inne
+precision_inne <- tp_inne / (tp_inne + fp_inne)
+recall_inne <- tp_inne / (tp_inne + fn_inne)
+f1_inne <- 2 * (precision_inne * recall_inne) / (precision_inne + recall_inne)
+
+tp_nawloc <- confusion_table_last["nawloc", "nawloc"]
+fp_nawloc <- sum(confusion_table_last[, "nawloc"]) - tp_nawloc
+fn_nawloc <- sum(confusion_table_last["nawloc", ]) - tp_nawloc
+precision_nawloc <- tp_nawloc / (tp_nawloc + fp_nawloc)
+recall_nawloc <- tp_nawloc / (tp_nawloc + fn_nawloc)
+f1_nawloc <- 2 * (precision_nawloc * recall_nawloc) / (precision_nawloc + recall_nawloc)
+
+results_last_iteration <- data.frame(
+  Class = c("inne", "nawloc"),
+  Precision = c(precision_inne, precision_nawloc),
+  Recall = c(recall_inne, recall_nawloc),
+  F1_Score = c(f1_inne, f1_nawloc)
+)
+
+print(results_last_iteration)
+
+openxlsx::write.xlsx(
+  results_last_iteration,
+  file = file.path(base_dir, "f1_scores_results2KL.xlsx")
+)
