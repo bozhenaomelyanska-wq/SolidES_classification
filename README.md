@@ -24,14 +24,27 @@ The script expects the following files in the working directory:
 Orthomosaic (GeoTIFF)
 Filename: orthophoto.tif
 The file must contain at least 3 bands (RGB). High-resolution UAV imagery is recommended.
+
 Reference data (Shapefile)
 Filename: reference.shp
 The file must include a column named class.
-Expected class labels are:
+
+Expected class labels:
+
 goldenrod
 other
 
 All shapefile components such as .dbf, .shx, and .prj must be present.
+
+Data availability
+
+The data provided in this repository represent a sample dataset used in the study.
+It includes one orthomosaic out of the 79 UAV datasets analysed in the article.
+
+If you are interested in accessing the full dataset, please contact the corresponding author:
+
+Bożena Omeliańska
+Email: bomelianska@twarda.pan.pl
 
 Installation
 
@@ -99,12 +112,13 @@ This repository accompanies the article:
 
 Building a representative UAV RGB reference dataset for national-scale satellite mapping of invasive goldenrods (Solidago spp.): an efficient workflow and accuracy drivers
 
-The study presents a nationally distributed UAV RGB reference dataset and an end-to-end workflow designed to support large-scale satellite mapping of invasive goldenrods in Poland. It emphasizes the importance of high-quality reference data, repeated classification, and expert visual verification for minimizing false positives and improving label consistency.
-
 Citation
 
 If you use this workflow, please cite the associated publication.
 
 Contact
 
-For questions or collaboration, contact the repository author.
+For questions or collaboration, contact:
+
+Bożena Omeliańska
+bomelianska@twarda.pan.pl
