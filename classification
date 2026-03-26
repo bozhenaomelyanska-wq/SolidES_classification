@@ -28,14 +28,14 @@ library(openxlsx)
 # WORKING DIRECTORY AND INPUT FILES
 # ---------------------------
 # This script assumes that the working directory contains:
-# 1. an RGB orthomosaic: "2024-08-14_2_trzesn_orto.tif"
-# 2. a reference shapefile: "2024-08-14_2_trzesn_referencja.shp"
+# 1. an RGB orthomosaic: "orthophoto.tif"
+# 2. a reference shapefile: "reference.shp"
 #    together with all associated shapefile components (.dbf, .shx, .prj, etc.)
 
 base_dir <- "."
 
-orthomosaic_path <- file.path(base_dir, "2024-08-14_2_trzesn_orto.tif")
-reference_path <- file.path(base_dir, "2024-08-14_2_trzesn_referencja.shp")
+ortof <- file.path(base_dir, "orthophoto.tif")
+wektor_path <- file.path(base_dir, "reference.shp")
 
 # Small constant used to avoid division by zero in selected spectral indices
 eps <- 1e-6
