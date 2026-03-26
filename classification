@@ -34,8 +34,8 @@ library(openxlsx)
 
 base_dir <- "."
 
-ortof <- file.path(base_dir, "orthophoto.tif")
-wektor_path <- file.path(base_dir, "reference.shp")
+orthophoto_path <- file.path(base_dir, "orthophoto.tif")
+reference_path <- file.path(base_dir, "reference.shp")
 
 # Small constant used to avoid division by zero in selected spectral indices
 eps <- 1e-6
@@ -43,7 +43,7 @@ eps <- 1e-6
 # ---------------------------
 # LOAD INPUT DATA
 # ---------------------------
-orthomosaic <- rast(orthomosaic_path)
+orthomosaic <- rast(orthophoto_path)
 reference_polygons <- st_read(reference_path, quiet = TRUE)
 
 if (nlyr(orthomosaic) < 3) {
@@ -167,7 +167,7 @@ writeRaster(mgrvi, filename = file.path(base_dir, "mgrvi_results.tif"), overwrit
 # BUILD THE MULTILAYER PREDICTOR STACK
 # ---------------------------
 rgb_layers <- orthomosaic[[1:3]]
-names(rgb_layers) <- c("orto_1", "orto_2", "orto_3")
+names(rgb_layers) <- c("ortho_1", "ortho_2", "ortho_3")
 
 predictor_stack <- c(
   glcm_red,
@@ -186,7 +186,7 @@ predictor_stack <- c(
 
 writeRaster(
   predictor_stack,
-  filename = file.path(base_dir, "merged_results.tif"),
+  filename = file.path(base_dir, "predictor_stack.tif"),
   overwrite = TRUE
 )
 
@@ -212,17 +212,17 @@ reference_vect <- vect(reference_polygons)
 
 training_data <- extract(predictor_stack, reference_vect, df = TRUE)
 
-if (!"klasy" %in% names(reference_polygons)) {
-  stop("The reference layer does not contain the required 'klasy' column.")
+if (!"class" %in% names(reference_polygons)) {
+  stop("The reference layer does not contain the required 'class' column.")
 }
 
-training_data$klasy <- reference_polygons$klasy[training_data$ID]
+training_data$class <- reference_polygons$class[training_data$ID]
 
 # Remove rows with missing class labels
-training_data <- training_data[!is.na(training_data$klasy), ]
+training_data <- training_data[!is.na(training_data$class), ]
 
 # Keep only ID, predictor variables, and class labels
-expected_columns <- c("ID", names(predictor_stack), "klasy")
+expected_columns <- c("ID", names(predictor_stack), "class")
 training_data <- training_data[, intersect(expected_columns, names(training_data))]
 
 # Convert integer columns to numeric where needed
@@ -234,10 +234,10 @@ training_data <- as.data.frame(lapply(training_data, function(column) {
   }
 }))
 
-training_data$klasy <- as.factor(training_data$klasy)
+training_data$class <- as.factor(training_data$class)
 
 # Replace invalid values in predictor columns
-predictor_columns <- setdiff(names(training_data), c("ID", "klasy"))
+predictor_columns <- setdiff(names(training_data), c("ID", "class"))
 training_data[, predictor_columns] <- lapply(
   training_data[, predictor_columns, drop = FALSE],
   function(column) ifelse(is.na(column) | is.nan(column) | is.infinite(column), 0, column)
@@ -247,14 +247,14 @@ training_data[, predictor_columns] <- lapply(
 # RANDOM FOREST CLASSIFICATION, 10 REPETITIONS
 # ---------------------------
 # This script assumes binary classification with class labels:
-# "inne" and "nawloc"
+# "other" and "goldenrod"
 
 classification_results <- vector("list", 10)
 
 for (i in 1:10) {
   set.seed(i)
 
-  train_index <- createDataPartition(training_data$klasy, p = 0.5, list = FALSE)
+  train_index <- createDataPartition(training_data$class, p = 0.5, list = FALSE)
 
   training_set <- training_data[train_index, ]
   validation_set <- training_data[-train_index, ]
@@ -262,11 +262,11 @@ for (i in 1:10) {
   training_set <- training_set[, setdiff(names(training_set), "ID"), drop = FALSE]
   validation_set <- validation_set[, setdiff(names(validation_set), "ID"), drop = FALSE]
 
-  training_set$klasy <- as.factor(training_set$klasy)
-  validation_set$klasy <- as.factor(validation_set$klasy)
+  training_set$class <- as.factor(training_set$class)
+  validation_set$class <- as.factor(validation_set$class)
 
-  training_predictors <- training_set[, setdiff(names(training_set), "klasy"), drop = FALSE]
-  validation_predictors <- validation_set[, setdiff(names(validation_set), "klasy"), drop = FALSE]
+  training_predictors <- training_set[, setdiff(names(training_set), "class"), drop = FALSE]
+  validation_predictors <- validation_set[, setdiff(names(validation_set), "class"), drop = FALSE]
 
   if (!all(sapply(training_predictors, is.numeric))) {
     stop(paste("Iteration", i, ": some training predictors are not numeric."))
@@ -277,35 +277,35 @@ for (i in 1:10) {
   }
 
   rf_model <- randomForest(
-    klasy ~ .,
+    class ~ .,
     data = training_set,
     ntree = 500,
     importance = TRUE
   )
 
   predictions <- predict(rf_model, validation_set)
-  confusion <- confusionMatrix(predictions, validation_set$klasy)
+  confusion <- confusionMatrix(predictions, validation_set$class)
   confusion_table <- confusion$table
 
-  tp_inne <- confusion_table["inne", "inne"]
-  fp_inne <- sum(confusion_table[, "inne"]) - tp_inne
-  fn_inne <- sum(confusion_table["inne", ]) - tp_inne
-  precision_inne <- tp_inne / (tp_inne + fp_inne)
-  recall_inne <- tp_inne / (tp_inne + fn_inne)
-  f1_inne <- 2 * (precision_inne * recall_inne) / (precision_inne + recall_inne)
+  tp_other <- confusion_table["other", "other"]
+  fp_other <- sum(confusion_table[, "other"]) - tp_other
+  fn_other <- sum(confusion_table["other", ]) - tp_other
+  precision_other <- tp_other / (tp_other + fp_other)
+  recall_other <- tp_other / (tp_other + fn_other)
+  f1_other <- 2 * (precision_other * recall_other) / (precision_other + recall_other)
 
-  tp_nawloc <- confusion_table["nawloc", "nawloc"]
-  fp_nawloc <- sum(confusion_table[, "nawloc"]) - tp_nawloc
-  fn_nawloc <- sum(confusion_table["nawloc", ]) - tp_nawloc
-  precision_nawloc <- tp_nawloc / (tp_nawloc + fp_nawloc)
-  recall_nawloc <- tp_nawloc / (tp_nawloc + fn_nawloc)
-  f1_nawloc <- 2 * (precision_nawloc * recall_nawloc) / (precision_nawloc + recall_nawloc)
+  tp_goldenrod <- confusion_table["goldenrod", "goldenrod"]
+  fp_goldenrod <- sum(confusion_table[, "goldenrod"]) - tp_goldenrod
+  fn_goldenrod <- sum(confusion_table["goldenrod", ]) - tp_goldenrod
+  precision_goldenrod <- tp_goldenrod / (tp_goldenrod + fp_goldenrod)
+  recall_goldenrod <- tp_goldenrod / (tp_goldenrod + fn_goldenrod)
+  f1_goldenrod <- 2 * (precision_goldenrod * recall_goldenrod) / (precision_goldenrod + recall_goldenrod)
 
   classification_results[[i]] <- list(
     model = rf_model,
     confusion_matrix = confusion,
-    f1_inne = f1_inne,
-    f1_nawloc = f1_nawloc,
+    f1_other = f1_other,
+    f1_goldenrod = f1_goldenrod,
     overall_accuracy = unname(confusion$overall["Accuracy"])
   )
 }
@@ -322,8 +322,8 @@ f1_summary <- do.call(rbind, lapply(seq_along(classification_results), function(
   result <- classification_results[[i]]
   data.frame(
     iteration = c(i, i),
-    class = c("inne", "nawloc"),
-    F1 = c(as.numeric(result$f1_inne), as.numeric(result$f1_nawloc)),
+    class = c("other", "goldenrod"),
+    F1 = c(as.numeric(result$f1_other), as.numeric(result$f1_goldenrod)),
     stringsAsFactors = FALSE
   )
 }))
@@ -357,7 +357,7 @@ for (j in 1:nlyr(predictor_stack_for_prediction)) {
 predicted_map <- terra::predict(
   predictor_stack_for_prediction,
   rf_model_final,
-  filename = file.path(base_dir, "wynik_trzesn.tif"),
+  filename = file.path(base_dir, "prediction_map.tif"),
   overwrite = TRUE
 )
 
@@ -369,30 +369,30 @@ plot(predicted_map, main = "Random Forest classification result")
 confusion_last <- classification_results[[10]]$confusion_matrix
 confusion_table_last <- confusion_last$table
 
-tp_inne <- confusion_table_last["inne", "inne"]
-fp_inne <- sum(confusion_table_last[, "inne"]) - tp_inne
-fn_inne <- sum(confusion_table_last["inne", ]) - tp_inne
-precision_inne <- tp_inne / (tp_inne + fp_inne)
-recall_inne <- tp_inne / (tp_inne + fn_inne)
-f1_inne <- 2 * (precision_inne * recall_inne) / (precision_inne + recall_inne)
+tp_other <- confusion_table_last["other", "other"]
+fp_other <- sum(confusion_table_last[, "other"]) - tp_other
+fn_other <- sum(confusion_table_last["other", ]) - tp_other
+precision_other <- tp_other / (tp_other + fp_other)
+recall_other <- tp_other / (tp_other + fn_other)
+f1_other <- 2 * (precision_other * recall_other) / (precision_other + recall_other)
 
-tp_nawloc <- confusion_table_last["nawloc", "nawloc"]
-fp_nawloc <- sum(confusion_table_last[, "nawloc"]) - tp_nawloc
-fn_nawloc <- sum(confusion_table_last["nawloc", ]) - tp_nawloc
-precision_nawloc <- tp_nawloc / (tp_nawloc + fp_nawloc)
-recall_nawloc <- tp_nawloc / (tp_nawloc + fn_nawloc)
-f1_nawloc <- 2 * (precision_nawloc * recall_nawloc) / (precision_nawloc + recall_nawloc)
+tp_goldenrod <- confusion_table_last["goldenrod", "goldenrod"]
+fp_goldenrod <- sum(confusion_table_last[, "goldenrod"]) - tp_goldenrod
+fn_goldenrod <- sum(confusion_table_last["goldenrod", ]) - tp_goldenrod
+precision_goldenrod <- tp_goldenrod / (tp_goldenrod + fp_goldenrod)
+recall_goldenrod <- tp_goldenrod / (tp_goldenrod + fn_goldenrod)
+f1_goldenrod <- 2 * (precision_goldenrod * recall_goldenrod) / (precision_goldenrod + recall_goldenrod)
 
 results_last_iteration <- data.frame(
-  Class = c("inne", "nawloc"),
-  Precision = c(precision_inne, precision_nawloc),
-  Recall = c(recall_inne, recall_nawloc),
-  F1_Score = c(f1_inne, f1_nawloc)
+  Class = c("other", "goldenrod"),
+  Precision = c(precision_other, precision_goldenrod),
+  Recall = c(recall_other, recall_goldenrod),
+  F1_Score = c(f1_other, f1_goldenrod)
 )
 
 print(results_last_iteration)
 
 openxlsx::write.xlsx(
   results_last_iteration,
-  file = file.path(base_dir, "f1_scores_results2KL.xlsx")
+  file = file.path(base_dir, "f1_scores_results_2classes.xlsx")
 )
