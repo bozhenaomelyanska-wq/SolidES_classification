@@ -370,15 +370,15 @@ confusion_last <- classification_results[[10]]$confusion_matrix
 confusion_table_last <- confusion_last$table
 
 tp_other <- confusion_table_last["other", "other"]
-fp_other <- sum(confusion_table_last[, "other"]) - tp_other
-fn_other <- sum(confusion_table_last["other", ]) - tp_other
+fp_other <- sum(confusion_table_last["other", ]) - tp_other
+fn_other <- sum(confusion_table_last[, "other"]) - tp_other
 precision_other <- tp_other / (tp_other + fp_other)
 recall_other <- tp_other / (tp_other + fn_other)
 f1_other <- 2 * (precision_other * recall_other) / (precision_other + recall_other)
 
 tp_goldenrod <- confusion_table_last["goldenrod", "goldenrod"]
-fp_goldenrod <- sum(confusion_table_last[, "goldenrod"]) - tp_goldenrod
-fn_goldenrod <- sum(confusion_table_last["goldenrod", ]) - tp_goldenrod
+fp_goldenrod <- sum(confusion_table_last["goldenrod", ]) - tp_goldenrod
+fn_goldenrod <- sum(confusion_table_last[, "goldenrod"]) - tp_goldenrod
 precision_goldenrod <- tp_goldenrod / (tp_goldenrod + fp_goldenrod)
 recall_goldenrod <- tp_goldenrod / (tp_goldenrod + fn_goldenrod)
 f1_goldenrod <- 2 * (precision_goldenrod * recall_goldenrod) / (precision_goldenrod + recall_goldenrod)
